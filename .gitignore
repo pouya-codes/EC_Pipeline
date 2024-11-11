@@ -1,0 +1,13 @@
+temp*
+.idea/
+__pycache__/
+DeepLIIF
+.vscode/
+models/
+*.sif
+bcpark*.py
+~$*
+bunzenlake.py
+*lock*
+deepliif
+output/

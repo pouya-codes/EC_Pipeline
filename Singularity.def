@@ -1,0 +1,25 @@
+Bootstrap: docker
+From: continuumio/miniconda3
+
+%files
+    environment.yaml /environment.yaml
+
+%post
+    apt-get update && apt-get -y install build-essential gcc ffmpeg libsm6 libxext6 python3-setuptools libvips openjdk-17-jdk
+    conda update -n base -c defaults conda -y
+    /opt/conda/bin/conda env create -f environment.yaml
+
+    # conda env create -f /environment.yaml
+    # echo -e "\nconda activate deepliif_env" >> ~/.bashrc
+   
+    # conda activate deepliif_env
+    /opt/conda/envs/deepliif_env/bin/pip install --upgrade torch torchvision
+    # conda clean -a
+
+%environment
+    # Activate the environment
+    # conda activate deepliif_env
+
+%runscript
+    # This is the default command when the container is run
+    exec /opt/conda/envs/deepliif_env/bin/"$@"
