@@ -1,22 +1,24 @@
-import glob, os, gc
+import glob, os
 # OPENSLIDE_PATH = r'D:/Develop/UBC/openslide/bin'
 # os.add_dll_directory(OPENSLIDE_PATH)
 # import openslide
 import cv2
 import json, torch
+from datetime import datetime
+from src.logging_utils import log_step, log_overall
 from PIL import Image
 from src.process_file import ImageProcessor
 import numpy as np
 from matplotlib.path import Path
 from myparser import parse_args
-from src.utils import process_annotation, process_mask, process_mask, process_qupath_dearray
+from src.utils import process_mask, process_mask
 from src.generate_mask import MaskGenerator
 import pyvips
 from tqdm import tqdm
 from torchvision import transforms
-from model import VanillaModel, VarMIL
+from src.model import VanillaModel, VarMIL
 class SlideProcessor:
-    def __init__(self, slides_path, output_path, patch_size = 1024, resize_size = 512, stride = 1):
+    def __init__(self, slides_path, output_path, patch_size = 1024, resize_size = 512, stride = 1, batch_size = 32, tumor_classifiers_threshold = 0.9):
         self.slides_path = slides_path
         self.output_path = output_path
         self.extensions = ['*.svs', '*.tiff', "*.tif", '*.ndpi']
@@ -24,12 +26,23 @@ class SlideProcessor:
         self.patch_size = patch_size
         self.resize_size = resize_size
         self.stride = stride
+        self.batch_size = batch_size
+        self.tumor_classifiers_threshold = tumor_classifiers_threshold
         
         if not os.path.exists(self.output_path):
             os.makedirs(self.output_path, exist_ok=True)
 
     def init_mask_generator(self, model_path):
-        self.mask_generator = MaskGenerator(model_path)
+        start_time = datetime.utcnow()
+        details = ""
+        try:
+            self.mask_generator = MaskGenerator(model_path)
+            status = "Success"
+        except Exception as e:
+            status = "Error"
+            details = f"Cannot load mask generator model from {model_path}\nError: {e}"
+        log_step("Mask generator initialization", start_time, datetime.utcnow(), status, details)
+
 
 
     def init_image_processor(self, model_dir, tile_size = 256, post_processing = True, gpu_ids=[]):
@@ -50,16 +63,23 @@ class SlideProcessor:
 
 
     def init_patch_classifier(self, model_path):
-        
-        model = torch.load(model_path, map_location=self.device)
-        self.patch_classifier = model.model.to(self.device)
-        # Define the transformations
-        self.transform = transforms.Compose([
-        transforms.Resize((self.resize_size, self.resize_size)),  # Resize the image
-        transforms.ToTensor(),
-        transforms.Normalize(mean=[0.7784, 0.7081, 0.7951],
-                             std=[0.1685, 0.2008, 0.1439])
-        ])
+        start_time = datetime.utcnow()
+        details = ""
+        try:
+            model = torch.load(model_path, map_location=self.device)
+            self.patch_classifier = model.model.to(self.device)
+            # Define the transformations
+            self.transform = transforms.Compose([
+            transforms.Resize((self.resize_size, self.resize_size)),  # Resize the image
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.7784, 0.7081, 0.7951],
+                                std=[0.1685, 0.2008, 0.1439])
+            ])
+            status = "Success"
+        except Exception as e:
+            status = "Error"
+            details = f"Cannot load patch classifier model from {model_path}\nError: {e}"
+        log_step("Patch classifier initialization", start_time, datetime.utcnow(), status, details)
 
     def init_representation_generator(self, model_path):
         state = torch.load(model_path, map_location=self.device)['model']
@@ -115,7 +135,7 @@ class SlideProcessor:
                     region = Image.fromarray(region.numpy())
                     
 
-                    if (False):
+                    if (save_regions):
                         os.makedirs(os.path.join(self.output_path, file_name, label), exist_ok=True)
                         img_path = os.path.join(self.output_path, file_name, label, f"{x}_{y}_{width}_{height}.png")
                         region_resized = region.resize((int(region.width // 4), int(region.height // 4)))
@@ -128,33 +148,45 @@ class SlideProcessor:
                     bbox = path.get_extents()
                     x_min_bbox, y_min_bbox, x_max_bbox, y_max_bbox = bbox.x0, bbox.y0, bbox.x1, bbox.y1
                     
-                    for x in range(int(x_min_bbox), int(x_max_bbox), self.patch_size * self.stride):
-                        for y in range(int(y_min_bbox), int(y_max_bbox), self.patch_size * self.stride):
-                            # Create a grid of points in the patch
-                            patch_points = [(x + dx, y + dy) for dx in range(self.patch_size) for dy in range(self.patch_size)]
-                            # Check if all points in the patch are inside the polygon
-                            if np.all(path.contains_points(patch_points)) or True:
-                                print(f"Found patch at {x}, {y}")
-                                # Extract the patch
-                                # os.makedirs(os.path.join(self.output_path, file_name, label), exist_ok=True)
-                                patch = region.crop((x, y, x + self.patch_size, y + self.patch_size)).convert("RGB")
-                                transormed_patch = self.transform(patch)
-                                transormed_patch = transormed_patch.cuda().unsqueeze(0) 
-                                with torch.no_grad():
-                                    output = self.patch_classifier.forward(transormed_patch)
-                                    probs = torch.softmax(output, dim=1)
-                                pred_prob = torch.squeeze(probs).cpu().numpy()
-                                label = np.argmax(pred_prob)
-                                probability = np.max(pred_prob)
-                                # tumor patches
-                                if label == 1 and probability > 0.9:
-                                    with torch.no_grad():
-                                        representation = self.representation_generator(transormed_patch)
-                                        representation = representation.squeeze()
-                                        slide_representation.append(representation)
-                                        print(len(slide_representation))
-                                        # print(representation.shape)
-                                        # exit()
+                    # Create a grid of points in the patch
+                    x_range = np.arange(int(x_min_bbox), int(x_max_bbox), self.patch_size * self.stride)
+                    y_range = np.arange(int(y_min_bbox), int(y_max_bbox), self.patch_size * self.stride)
+                    grid_x, grid_y = np.meshgrid(x_range, y_range)
+                    grid_points = np.vstack([grid_x.ravel(), grid_y.ravel()]).T
+
+                    # Check if all points in the patch are inside the polygon
+                    inside_points = path.contains_points(grid_points)
+
+                    # Collect patches and their coordinates
+                    patches = []
+                    patch_coords = []
+
+                    for point, inside in zip(grid_points, inside_points):
+                        if inside:
+                            x, y = point
+                            # print(f"Found patch at {x}, {y}")
+                            patch = region.crop((x, y, x + self.patch_size, y + self.patch_size)).convert("RGB")
+                            transformed_patch = self.transform(patch)
+                            patches.append(transformed_patch)
+                            patch_coords.append((x, y))
+
+                    # Process patches in batches
+                    for i in range(0, len(patches), self.batch_size):
+                        batch_patches = patches[i:i + self.batch_size]
+                        # batch_coords = patch_coords[i:i + self.batch_size]
+
+                        if batch_patches:
+                            batch_patches = torch.stack(batch_patches).cuda()
+                            with torch.no_grad():
+                                outputs = self.patch_classifier.forward(batch_patches)
+                                probs = torch.softmax(outputs, dim=1)
+                                pred_probs = probs.cpu().numpy()
+                                labels = np.argmax(pred_probs, axis=1)
+                                tumor_possitive = (np.max(pred_probs, axis=1) > self.tumor_classifiers_threshold) & (labels == 1)
+                                tumor_patches = [patch for patch, is_tumor in zip(batch_patches, tumor_possitive) if is_tumor]
+                                if (tumor_patches):
+                                    representation = self.representation_generator(torch.stack(tumor_patches))
+                                    slide_representation.extend(representation)
 
 
 
@@ -171,15 +203,11 @@ def main():
     args = parse_args()
     processor = SlideProcessor(args.slides_path, 
                                args.output_path)
-
     processor.init_mask_generator(args.mask_generator_model_path)
     processor.init_patch_classifier(args.patch_classifier_model)
     processor.init_representation_generator('models/model_patch_balanced_acc.pth')
     processor.init_VarMIL('models/model_overall_acc.pth')
-
-        
-
-    processor.process_slides(save_regions=True)
+    processor.process_slides(save_regions=False)
 
 if __name__ == "__main__":
     main()
