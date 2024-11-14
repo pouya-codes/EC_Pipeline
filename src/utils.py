@@ -6,6 +6,12 @@ import numpy as np
 from distutils.util import strtobool
 import matplotlib.path as mpath
 
+
+class DictToAttr:
+    def __init__(self, dictionary):
+        for key, value in dictionary.items():
+            setattr(self, key, value)
+            
 def process_annotation(annotation_path):
     regions = defaultdict(list)
     with open(annotation_path, 'r') as f:

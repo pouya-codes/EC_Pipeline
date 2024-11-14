@@ -6,6 +6,24 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger()
 
+
+def log_start_action(action_name, details):
+    log_entry = {
+        "action_name": action_name,
+        "start_time": datetime.now().isoformat() + 'Z',
+        "details": details
+    }
+    logger.info(json.dumps(log_entry))
+
+def log_end_action(action_name, status, details):
+    log_entry = {
+        "action_name": action_name,
+        "status": status,
+        "end_time": datetime.now().isoformat() + 'Z',
+        "details": details
+    }
+    logger.info(json.dumps(log_entry))  
+
 # Function to log a step
 def log_step(step_name, start_time, end_time, status, details):
     log_entry = {

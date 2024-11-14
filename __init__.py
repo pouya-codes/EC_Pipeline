@@ -5,18 +5,22 @@ import glob, os
 import cv2
 import json, torch
 from datetime import datetime
-from src.logging_utils import log_step, log_overall
+from src.logging_utils import *
 from PIL import Image
 from src.process_file import ImageProcessor
 import numpy as np
 from matplotlib.path import Path
 from myparser import parse_args
-from src.utils import process_mask, process_mask
+from src.utils import process_mask, process_mask, DictToAttr
 from src.generate_mask import MaskGenerator
 import pyvips
 from tqdm import tqdm
 from torchvision import transforms
 from src.model import VanillaModel, VarMIL
+from flask import Flask, request, jsonify
+import boto3
+
+app = Flask(__name__)
 class SlideProcessor:
     def __init__(self, slides_path, output_path, patch_size = 1024, resize_size = 512, stride = 1, batch_size = 32, tumor_classifiers_threshold = 0.9):
         self.slides_path = slides_path
@@ -33,15 +37,15 @@ class SlideProcessor:
             os.makedirs(self.output_path, exist_ok=True)
 
     def init_mask_generator(self, model_path):
-        start_time = datetime.utcnow()
-        details = ""
+        log_start_action("Mask generator initialization", f"Loading model from {model_path}")
         try:
             self.mask_generator = MaskGenerator(model_path)
             status = "Success"
+            details = ""
         except Exception as e:
             status = "Error"
             details = f"Cannot load mask generator model from {model_path}\nError: {e}"
-        log_step("Mask generator initialization", start_time, datetime.utcnow(), status, details)
+        log_end_action("Mask generator initialization", status, details)
 
 
 
@@ -49,22 +53,28 @@ class SlideProcessor:
         self.image_processor = ImageProcessor(model_dir, tile_size, post_processing, gpu_ids)
 
     def init_VarMIL(self, model_path):
-        state = torch.load(model_path, map_location=self.device)
-        model = VarMIL('resnet34', 2)
-        state_dict = state['model']
-        new_state_dict = {}
-        for k, v in state_dict.items():
-            new_key = k.replace('model.', '')
-            new_state_dict[new_key] = v
-        model.eval()
-        self.VarMIL = model.to(self.device)
-        self.VarMIL.load_state_dict(new_state_dict, strict=True)
-        print("VarMIL model loaded")
+        log_start_action("VarMIL initialization", f"Loading model from {model_path}")
+        try:
+            state = torch.load(model_path, map_location=self.device)
+            model = VarMIL('resnet34', 2)
+            state_dict = state['model']
+            new_state_dict = {}
+            for k, v in state_dict.items():
+                new_key = k.replace('model.', '')
+                new_state_dict[new_key] = v
+            model.eval()
+            self.VarMIL = model.to(self.device)
+            self.VarMIL.load_state_dict(new_state_dict, strict=True)
+            status = "Success"
+            details = ""
+        except Exception as e:
+            status = "Error"
+            details = f"Cannot load VarMIL model from {model_path}\nError: {e}"
+        log_end_action("VarMIL initialization", status, details)
 
 
     def init_patch_classifier(self, model_path):
-        start_time = datetime.utcnow()
-        details = ""
+        log_start_action("Patch classifier initialization", f"Loading model from {model_path}")
         try:
             model = torch.load(model_path, map_location=self.device)
             self.patch_classifier = model.model.to(self.device)
@@ -76,34 +86,52 @@ class SlideProcessor:
                                 std=[0.1685, 0.2008, 0.1439])
             ])
             status = "Success"
+            details = ""
         except Exception as e:
             status = "Error"
             details = f"Cannot load patch classifier model from {model_path}\nError: {e}"
-        log_step("Patch classifier initialization", start_time, datetime.utcnow(), status, details)
+        log_end_action("Patch classifier initialization", status, details)
 
     def init_representation_generator(self, model_path):
-        state = torch.load(model_path, map_location=self.device)['model']
-        model = VanillaModel('resnet34')
-
-        model.eval()
-        self.representation_generator = model.to(self.device)
-        _, error_keys = self.representation_generator.load_state_dict(state, strict=False)
-        for key in error_keys:
-            if 'classifier' not in key:
-                raise ValueError('Only classifier should be among unexpected keys!')
+        log_start_action("Representation generator initialization", f"Loading model from {model_path}")
+        try:
+            state = torch.load(model_path, map_location=self.device)['model']
+            model = VanillaModel('resnet34')
+            model.eval()
+            self.representation_generator = model.to(self.device)
+            _, error_keys = self.representation_generator.load_state_dict(state, strict=False)
+            for key in error_keys:
+                if 'classifier' not in key:
+                    raise ValueError('Only classifier should be among unexpected keys!')
+            status = "Success"
+            details = ""
+        except Exception as e:
+            status = "Error"
+            details = f"Cannot load representation generator model from {model_path}\nError: {e}"
+        log_end_action("Representation generator initialization", status, details)
 
     def open_wsi_slide(self, slide_path):
+        log_start_action("Open slide", f"Opening slide {slide_path}")
+        slide = None
         try:
             slide = pyvips.Image.new_from_file(slide_path)
-            return slide
+            status = "Success"
+            detail = ""
         except Exception as e:
             print(f"Cannot open {slide_path}\nError: {e}")
-            return None
+            status = "Error"
+            detail = f"Cannot open {slide_path}\nError: {e}"
+        log_end_action("Open slide", status, detail)
+        return slide
         
     def process_slides(self, save_regions = False):
+        log_start_action("Processing slides", f"Processing slides from {self.slides_path}")
+
+        results = {}
         slides = [slide for ext in self.extensions for slide in glob.glob(os.path.join(self.slides_path, ext))]
         for slide_path in slides:
             print(f"Processing {slide_path}")
+            log_start_action("Processing slide", f"Processing slide {slide_path}")
             slide = self.open_wsi_slide(slide_path)
             file_name = os.path.basename(slide_path).split('.')[0]
             slide_dimensions = slide.width, slide.height
@@ -121,20 +149,13 @@ class SlideProcessor:
                 for area in tqdm(areas):
 
                     x, y, width, height, *path = area if len(area) == 5 else area + [None]
-                    # print(f"Processing {label} area {x}, {y}, {width}, {height}")
-                    if x < 0:
-                        x = 0
-                    if y < 0:
-                        y = 0
-                    if x + width > slide_dimensions[0]:
-                        width = slide_dimensions[0] - x
-                    if y + height > slide_dimensions[1]:
-                        height = slide_dimensions[1] - y
-                    
+                    x = max(x, 0)
+                    y = max(y, 0)
+                    width = min(width, slide_dimensions[0] - x)
+                    height = min(height, slide_dimensions[1] - y)
                     region = slide.crop(x, y, width, height)
                     region = Image.fromarray(region.numpy())
-                    
-
+                    1
                     if (save_regions):
                         os.makedirs(os.path.join(self.output_path, file_name, label), exist_ok=True)
                         img_path = os.path.join(self.output_path, file_name, label, f"{x}_{y}_{width}_{height}.png")
@@ -185,8 +206,9 @@ class SlideProcessor:
                                 tumor_possitive = (np.max(pred_probs, axis=1) > self.tumor_classifiers_threshold) & (labels == 1)
                                 tumor_patches = [patch for patch, is_tumor in zip(batch_patches, tumor_possitive) if is_tumor]
                                 if (tumor_patches):
-                                    representation = self.representation_generator(torch.stack(tumor_patches))
-                                    slide_representation.extend(representation)
+                                    with torch.no_grad():
+                                        representation = self.representation_generator(torch.stack(tumor_patches))
+                                        slide_representation.extend(representation)
 
 
 
@@ -195,19 +217,51 @@ class SlideProcessor:
             bag = bag.unsqueeze(0)
             _, output = self.VarMIL.forward(bag)
             probs = torch.softmax(output, dim=1)
-            print(probs)
+            results[file_name] = probs.cpu().detach().numpy()
+            log_end_action("Processing slide", "Success", f"Processed slide {slide_path}")
+        return results
+            
 
 
-
+@app.route('/process', methods=['POST'])
 def main():
-    args = parse_args()
+    data = request.json
+    slide_path = data['test_path']
+    # s3_bucket = data['s3_bucket']
+    # s3_key = data['s3_key']
+    # s3 = boto3.client('s3')
+    # slide_path = '/tmp/slide.svs'
+    # slide_path = '/tmp'
+    # s3.download_file(s3_bucket, s3_key, slide_path)
+    
+    # args = parse_args()
+    args = {
+        'slides_path': slide_path,
+        'output_path': '/tmp/output',
+        'mask_generator_model_path': 'models/sam_vit_h.pth',
+        'patch_classifier_model': 'models/tumor_normal.pt',
+        'representation_generator_model': 'models/representation.pth',
+        'VarMIL_model': 'models/VarMIL.pth'
+    }
+    args = DictToAttr(args)
     processor = SlideProcessor(args.slides_path, 
                                args.output_path)
     processor.init_mask_generator(args.mask_generator_model_path)
     processor.init_patch_classifier(args.patch_classifier_model)
-    processor.init_representation_generator('models/model_patch_balanced_acc.pth')
-    processor.init_VarMIL('models/model_overall_acc.pth')
-    processor.process_slides(save_regions=False)
+    processor.init_representation_generator(args.representation_generator_model)
+    processor.init_VarMIL(args.VarMIL_model)
+    probabilities = processor.process_slides(save_regions=False)
+    results = {}
+    for slide, result in probabilities.items():
+        results[slide] = result.tolist()
+    print(results)
 
-if __name__ == "__main__":
-    main()
+    result = {
+        "status": "success",
+        "message": "Slide processed successfully",
+        "details": results
+    }
+    return jsonify(result)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
