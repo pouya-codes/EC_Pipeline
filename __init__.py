@@ -260,12 +260,14 @@ def main():
     results = {}
     for slide, result in probabilities.items():
         results[slide] = result.tolist()
+
     os.remove(slides_path)
     print(results)
     results_json = json.dumps(results)
     s3.put_object(Bucket=bucket_name, Key="results.json", Body=results_json)
 
     print(f"Results stored in S3 bucket {bucket_name} with key {results.json}")
+    
     # result = {
     #     "status": "success",
     #     "message": "Slide processed successfully",
