@@ -7,7 +7,6 @@ import json, torch
 from datetime import datetime
 from src.logging_utils import *
 from PIL import Image
-from src.process_file import ImageProcessor
 import numpy as np
 from matplotlib.path import Path
 from myparser import parse_args
@@ -17,10 +16,10 @@ import pyvips
 from tqdm import tqdm
 from torchvision import transforms
 from src.model import VanillaModel, VarMIL
-from flask import Flask, request, jsonify
+# from flask import Flask, request, jsonify
 import boto3
-
-app = Flask(__name__)
+from aws_config import *
+# app = Flask(__name__)
 class SlideProcessor:
     def __init__(self, slides_path, output_path, patch_size = 1024, resize_size = 512, stride = 1, batch_size = 32, tumor_classifiers_threshold = 0.9):
         self.slides_path = slides_path
@@ -44,13 +43,9 @@ class SlideProcessor:
             details = ""
         except Exception as e:
             status = "Error"
-            details = f"Cannot load mask generator model from {model_path}\nError: {e}"
+            details = f"Error: {e}"
         log_end_action("Mask generator initialization", status, details)
 
-
-
-    def init_image_processor(self, model_dir, tile_size = 256, post_processing = True, gpu_ids=[]):
-        self.image_processor = ImageProcessor(model_dir, tile_size, post_processing, gpu_ids)
 
     def init_VarMIL(self, model_path):
         log_start_action("VarMIL initialization", f"Loading model from {model_path}")
@@ -223,20 +218,30 @@ class SlideProcessor:
             
 
 
-@app.route('/process', methods=['POST'])
+# @app.route('/process', methods=['POST'])
 def main():
-    data = request.json
-    slide_path = data['test_path']
-    # s3_bucket = data['s3_bucket']
-    # s3_key = data['s3_key']
-    # s3 = boto3.client('s3')
-    # slide_path = '/tmp/slide.svs'
-    # slide_path = '/tmp'
+    bucket_name = INPUT_BUCKET
+    s3 = boto3.client('s3')
+    response = s3.list_objects_v2(Bucket=bucket_name)
+    if 'Contents' not in response:
+        print("No files found in the specified S3 bucket/prefix")
+        return
+    for obj in response['Contents']:
+        s3_key = obj['Key']
+        print(f"Processing {s3_key}")
+        slide_path = f'/tmp/{s3_key.split("/")[-1]}'
+        
+        # Download the file from S3
+        s3.download_file(bucket_name, s3_key, slide_path)
+
+
+
+    slides_path = '/tmp'
     # s3.download_file(s3_bucket, s3_key, slide_path)
     
     # args = parse_args()
     args = {
-        'slides_path': slide_path,
+        'slides_path': slides_path,
         'output_path': '/tmp/output',
         'mask_generator_model_path': 'models/sam_vit_h.pth',
         'patch_classifier_model': 'models/tumor_normal.pt',
@@ -254,14 +259,25 @@ def main():
     results = {}
     for slide, result in probabilities.items():
         results[slide] = result.tolist()
+    os.remove(slides_path)
     print(results)
+    results_json = json.dumps(results)
+    s3.put_object(Bucket=bucket_name, Key="results.json", Body=results_json)
 
-    result = {
-        "status": "success",
-        "message": "Slide processed successfully",
-        "details": results
-    }
-    return jsonify(result)
+    print(f"Results stored in S3 bucket {bucket_name} with key {results.json}")
+    # result = {
+    #     "status": "success",
+    #     "message": "Slide processed successfully",
+    #     "details": results
+    # }
+    # return jsonify(result)
+
+# @app.route('/health', methods=['GET'])
+# def health_check():
+#     return jsonify({"status": "Container is running"}), 200
+
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    main()
+    # app.run(host='0.0.0.0', port=5000)
