@@ -222,19 +222,18 @@ class SlideProcessor:
 def main():
     bucket_name = INPUT_BUCKET
     log_start_action("Reading s3 bucket", f"Reading from bucket {bucket_name}")
-
-    # s3 = boto3.client('s3')
-    # response = s3.list_objects_v2(Bucket=bucket_name)
-    # if 'Contents' not in response:
-    #     print("No files found in the specified S3 bucket/prefix")
-    #     return
-    # for obj in response['Contents']:
-    #     s3_key = obj['Key']
-    #     print(f"Processing {s3_key}")
-    #     slide_path = f'/tmp/{s3_key.split("/")[-1]}'
+    s3 = boto3.client('s3')
+    response = s3.list_objects_v2(Bucket=bucket_name)
+    if 'Contents' not in response:
+        print("No files found in the specified S3 bucket/prefix")
+        return
+    for obj in response['Contents']:
+        s3_key = obj['Key']
+        print(f"Processing {s3_key}")
+        slide_path = f'/tmp/{s3_key.split("/")[-1]}'
         
-    #     s3.download_file(bucket_name, s3_key, slide_path)
-    # log_end_action("Reading s3 bucket", "Success", f"Reading from bucket {bucket_name}")
+        s3.download_file(bucket_name, s3_key, slide_path)
+    log_end_action("Reading s3 bucket", "Success", f"Reading from bucket {bucket_name}")
 
 
     slides_path = '/tmp'
@@ -260,7 +259,6 @@ def main():
     results = {}
     for slide, result in probabilities.items():
         results[slide] = result.tolist()
-
     os.remove(slides_path)
     print(results)
     results_json = json.dumps(results)
