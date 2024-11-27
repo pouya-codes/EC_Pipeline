@@ -19,6 +19,8 @@ from src.model import VanillaModel, VarMIL
 # from flask import Flask, request, jsonify
 import boto3
 from aws_config import *
+import shutil
+
 # app = Flask(__name__)
 class SlideProcessor:
     def __init__(self, slides_path, output_path, patch_size = 1024, resize_size = 512, stride = 1, batch_size = 32, tumor_classifiers_threshold = 0.9):
@@ -237,7 +239,6 @@ def main():
 
 
     slides_path = '/tmp'
-    # s3.download_file(s3_bucket, s3_key, slide_path)
     
     # args = parse_args()
     args = {
@@ -258,14 +259,23 @@ def main():
     probabilities = processor.process_slides(save_regions=False)
     results = {}
     for slide, result in probabilities.items():
-        results[slide] = result.tolist()
-    os.remove(slides_path)
+        results[slide] = {"classification_restuls:": {"NSMP_probability": round(result.tolist()[0][0], 2), "p53_probability": round(result.tolist()[0][1], 2)}}
+    
     print(results)
     results_json = json.dumps(results)
+    # save json to disk
+    # with open('results.json', 'w') as f:
+    #     f.write(results_json)
+
+    
     s3.put_object(Bucket=bucket_name, Key="results.json", Body=results_json)
 
     print(f"Results stored in S3 bucket {bucket_name} with key {results.json}")
-    
+    log_end_action("Processing slides", "Success", f"Processed slides from {slides_path}")
+    log_start_action("Cleaning up", "Cleaning up temporary files")
+    shutil.rmtree(slides_path)
+    log_end_action("Cleaning up", "Success", "Cleaned up temporary files")
+
     # result = {
     #     "status": "success",
     #     "message": "Slide processed successfully",
