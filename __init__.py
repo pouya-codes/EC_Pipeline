@@ -268,9 +268,13 @@ def main():
     #     f.write(results_json)
 
     
-    s3.put_object(Bucket=bucket_name, Key="results.json", Body=results_json)
+    # Generate a timestamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    file_name = f"results_{bucket_name}_{timestamp}.json"
+    s3.put_object(Bucket=bucket_name, Key=file_name, Body=results_json)
 
-    print(f"Results stored in S3 bucket {bucket_name} with key {results.json}")
+
+    print(f"Results stored in S3 bucket {bucket_name} with key results.json")
     log_end_action("Processing slides", "Success", f"Processed slides from {slides_path}")
     log_start_action("Cleaning up", "Cleaning up temporary files")
     shutil.rmtree(slides_path)
