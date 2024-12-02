@@ -1,7 +1,4 @@
 import glob, os
-# OPENSLIDE_PATH = r'D:/Develop/UBC/openslide/bin'
-# os.add_dll_directory(OPENSLIDE_PATH)
-# import openslide
 import cv2
 import json, torch
 from datetime import datetime
@@ -16,10 +13,8 @@ import pyvips
 from tqdm import tqdm
 from torchvision import transforms
 from src.model import VanillaModel, VarMIL
-# from flask import Flask, request, jsonify
 import boto3
 from aws_config import *
-# import shutil
 
 # app = Flask(__name__)
 class SlideProcessor:
@@ -268,11 +263,16 @@ def main():
     #     f.write(results_json)
 
     
-    # Generate a timestamp
+
+
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_name = f"results_{bucket_name}_{timestamp}.json"
-    s3.put_object(Bucket=bucket_name, Key=file_name, Body=results_json)
+    # Save result to s3 bucket
+    bucket_name = OUTPUT_BUCKET if OUTPUT_BUCKET else INPUT_BUCKET
 
+    s3.put_object(Bucket=bucket_name, Key=file_name, Body=results_json)
+    s3 = boto3.client('s3')
 
     print(f"Results stored in S3 bucket {bucket_name} with key results.json")
     log_end_action("Processing slides", "Success", f"Processed slides from {slides_path}")

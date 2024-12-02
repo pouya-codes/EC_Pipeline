@@ -1,56 +1,43 @@
-# WSI Slide Area Extractor
+# Slide Processing Application
 
-This project extracts areas/cores from Whole Slide Images (WSI) and process them based on Deepliif moldel.
+This application processes whole slide images (WSI) from an S3 bucket, performs various analyses using machine learning models, and stores the results back in an S3 bucket. The application is designed to run inside a Docker container and can be deployed on AWS ECS.
 
-## Requirements
+## Features
 
-- Conda
-- Deepliif
-- Segment Anything
+- Downloads slide images from an S3 bucket.
+- Processes slides using multiple machine learning models.
+- Stores the results in JSON format in an S3 bucket.
+- Supports GPU acceleration using NVIDIA CUDA.
 
-## Install
+## Prerequisites
 
-To create the running enviroment use the following command:
+- Docker
+- AWS CLI
+- AWS S3 bucket with slide images
+- NVIDIA GPU and CUDA drivers (for GPU acceleration)
 
-```shell
-conda create --name deepliif_env --file requirements.txt
-```
-
-Download Deepliif latest model by following this link:
-```
-https://zenodo.org/record/4751737#.YKRTS0NKhH4
-```
-
-For generation the masks download lastest segment anything model checkpoint from the following link:
-
-```
-https://github.com/facebookresearch/segment-anything#model-checkpoints
-```
 
 ## Usage
 
-To use this script, you need to pass several arguments:
+### 1. Clone the Repository
 
-- `--slides_path`: Path to the WSI slides location (required)
-- `--masks_path`: Path to the HistoQC masks location (optional)
-- `--annotations_path`: Path to the slides' annotation (optional)
-- `--output_path`: Path to the output location (required)
-- `--slide_down_sample_rate`: The rate of down sampling the extracted regions (default: 5)
-- `--overlay_down_sample_rate`: The rate of down sampling to generated overlay (default: 5)
-
-You can also choose to run two additional functionalities:
-
-- `--deepliif`: Run deepliif (optional)
-  - `--model_dir`: Path to the unserilized model directory (required if `--deepliif` is set)
-  - `--tile_size`: Size of the tiles to be processed (default: 256)
-  - `--post_processing`: Run postprocessing algorithm on the results (default: True)
-
-- `--mask_generator`: Run mask generator (optional)
-  - `--model_path`: Path to the segment anything model checkpoint (required if `--mask_generator` is set)
-
-Example command:
-
-```shell
-conda activate deepliif_env
-python myparser.py --slides_path "path/to/slides" --output_path "path/to/output" --deepliif --model_dir "path/to/model" --mask_generator --model_path "path/to/checkpoint"
+```sh
+git clone <repository-url>
+cd <repository-directory>
 ```
+
+### 2. Build the Docker Image
+```sh
+docker build -t slide-processing-app .
+```
+
+### 3. Run the Docker Container
+```sh
+docker run --gpus all -e INPUT_BUCKET=my-input-bucket -e OUTPUT_BUCKET=my-output-bucket -p 5000:5000 slide-processing-app
+```
+
+Replace my-input-bucket and my-output-bucket with the names of your S3 buckets.
+
+#### Environment Variables
+- `INPUT_BUCKET`: The name of the S3 bucket containing the input slide images.
+- `OUTPUT_BUCKET`: The name of the S3 bucket where the results will be stored.
